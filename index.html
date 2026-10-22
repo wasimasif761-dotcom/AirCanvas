@@ -1,0 +1,1433 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>AirCanvas - AI In-Air Finger Drawing</title>
+    <meta name="description" content="Draw in the air using your index finger and webcam with on-device MediaPipe AI hand tracking." />
+    <meta property="og:title" content="AirCanvas - AI In-Air Finger Drawing" />
+    <meta property="og:description" content="AI-powered webcam air drawing application using MediaPipe hand detection." />
+    <meta property="og:type" content="website" />
+    <meta name="theme-color" content="#090d16" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+    <!-- PWA Web App Manifest (Data URI) -->
+    <link rel="manifest" href="data:application/manifest+json,%7B%22name%22%3A%22AirCanvas%22%2C%22short_name%22%3A%22AirCanvas%22%2C%22description%22%3A%22AI-powered%20in-air%20finger%20drawing%20PWA%22%2C%22start_url%22%3A%22.%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%23080b11%22%2C%22theme_color%22%3A%22%23080b11%22%2C%22icons%22%3A%5B%7B%22src%22%3A%22data%3Aimage%2Fsvg%2Bxml%2C%253Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%20192%20192'%253E%253Crect%20width%3D'192'%20height%3D'192'%20rx%3D'40'%20fill%3D'%23090d16'%2F%253E%253Cpath%20d%3D'M96%2036%20C125%2036%2C148%2059%2C148%2088%20C148%20120%2C96%20156%2C96%20156%20C96%20156%2C44%20120%2C44%2088%20C44%2059%2C67%2036%2C96%2036%20Z'%20fill%3D'%2306b6d4'%2F%253E%253C%2Fsvg%253E%22%2C%22sizes%22%3A%22192x192%22%2C%22type%22%3A%22image%2Fsvg%2Bxml%22%7D%5D%7D" />
+
+    <!-- Tailwind CSS (via CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            colors: {
+              cyber: {
+                950: '#06080d',
+                900: '#090d16',
+                800: '#111726',
+                700: '#1a2238',
+                accent: '#06b6d4',
+                neonPink: '#ec4899',
+                neonGreen: '#10b981',
+                neonPurple: '#a855f7',
+                neonYellow: '#eab308'
+              }
+            },
+            boxShadow: {
+              'glow-cyan': '0 0 25px -4px rgba(6, 182, 212, 0.5)',
+              'glow-pink': '0 0 25px -4px rgba(236, 72, 153, 0.5)',
+              'glow-green': '0 0 25px -4px rgba(16, 185, 129, 0.5)',
+              'hud': '0 8px 32px 0 rgba(0, 0, 0, 0.45), inset 0 1px 0 0 rgba(255, 255, 255, 0.08)'
+            },
+            fontFamily: {
+              mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace']
+            }
+          }
+        }
+      }
+    </script>
+
+    <!-- MediaPipe Hands & Camera Utils (via CDN) -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.4.1675466862/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3.1675466124/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+      /* Futuristic background grid and scrollbar */
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: #06080d;
+        color: #f1f5f9;
+        overflow: hidden;
+        user-select: none;
+        -webkit-user-select: none;
+        touch-action: none;
+      }
+      .bg-grid {
+        background-size: 32px 32px;
+        background-image: 
+          linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+          linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+      }
+      /* Mirror video horizontally for natural mirror behavior */
+      #webcam-video {
+        transform: scaleX(-1);
+        -webkit-transform: scaleX(-1);
+      }
+      /* Custom glowing cursor indicator */
+      .reticle-ping {
+        animation: ping 1.2s cubic-bezier(0, 0, 0.2, 1) infinite;
+      }
+      @keyframes ping {
+        75%, 100% {
+          transform: scale(2.2);
+          opacity: 0;
+        }
+      }
+      /* Glassmorphism utility */
+      .glass-panel {
+        background: rgba(12, 17, 29, 0.78);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+      .glass-button {
+        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      .glass-button:active {
+        transform: scale(0.95);
+      }
+    </style>
+  </head>
+  <body class="w-screen h-screen relative flex flex-col items-center justify-between font-sans bg-cyber-950 overflow-hidden">
+
+    <!-- Container for mirrored webcam and transparent drawing canvas -->
+    <div id="viewport-container" class="absolute inset-0 w-full h-full overflow-hidden bg-black flex items-center justify-center">
+      <!-- Background cyber grid when video has low opacity -->
+      <div class="absolute inset-0 bg-grid pointer-events-none opacity-40"></div>
+
+      <!-- Hidden or mirrored live video element -->
+      <video
+        id="webcam-video"
+        playsinline
+        muted
+        autoplay
+        class="absolute w-full h-full object-cover transition-opacity duration-300 pointer-events-none opacity-70 filter brightness-[0.72] contrast-[1.12]"
+      ></video>
+
+      <!-- Main transparent drawing canvas -->
+      <canvas
+        id="drawing-canvas"
+        class="absolute inset-0 w-full h-full z-10 cursor-crosshair"
+      ></canvas>
+
+      <!-- Overlay HUD canvas for hand landmarks, joints, and reticles -->
+      <canvas
+        id="hud-canvas"
+        class="absolute inset-0 w-full h-full z-20 pointer-events-none"
+      ></canvas>
+
+      <!-- Air Pointer Visual Marker -->
+      <div
+        id="air-pointer"
+        class="fixed z-30 pointer-events-none -translate-x-1/2 -translate-y-1/2 transition-opacity duration-150 opacity-0"
+        style="top: 0px; left: 0px;"
+      >
+        <div id="pointer-ring" class="w-7 h-7 rounded-full border-2 border-cyan-400 flex items-center justify-center transition-all duration-150">
+          <div id="pointer-dot" class="w-2.5 h-2.5 rounded-full bg-cyan-400 shadow-[0_0_12px_#06b6d4]"></div>
+          <div id="pointer-pulse" class="absolute inset-0 rounded-full border border-cyan-300 opacity-60 reticle-ping"></div>
+        </div>
+        <div id="pointer-badge" class="absolute left-8 top-1/2 -translate-y-1/2 px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider uppercase text-cyan-200 bg-cyber-900/90 border border-cyan-500/40 whitespace-nowrap shadow-md">
+          DRAWING
+        </div>
+      </div>
+    </div>
+
+    <!-- TOP BAR HUD -->
+    <header class="relative z-40 w-full max-w-7xl px-4 pt-3 flex items-center justify-between gap-3 pointer-events-none">
+      <!-- App Brand & Status -->
+      <div class="flex items-center gap-2.5 pointer-events-auto">
+        <div class="glass-panel px-3.5 py-2 rounded-xl flex items-center gap-3 shadow-hud">
+          <!-- Logo Icon -->
+          <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-500 to-indigo-600 flex items-center justify-center shadow-glow-cyan">
+            <svg class="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m18 15-6-6-6 6"/>
+              <circle cx="12" cy="7" r="2"/>
+              <path d="M12 9v12"/>
+            </svg>
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <h1 class="text-sm font-bold tracking-wide text-white uppercase font-mono">AirCanvas</h1>
+              <span class="text-[10px] uppercase font-semibold px-1.5 py-0.2 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">AI Vision</span>
+            </div>
+            <!-- Dynamic State Pill -->
+            <div class="flex items-center gap-1.5 mt-0.5">
+              <span id="status-indicator-dot" class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+              <span id="status-indicator-text" class="text-xs text-slate-300 font-medium">Camera Standby</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Action Controls (Undo, Redo, Clear, Snap, Guide) -->
+      <div class="flex items-center gap-2 pointer-events-auto">
+        <!-- Undo Button -->
+        <button
+          id="btn-undo"
+          title="Undo last stroke (Ctrl+Z)"
+          class="glass-panel glass-button w-10 h-10 rounded-xl flex items-center justify-center text-slate-300 hover:text-white hover:border-cyan-500/40 disabled:opacity-30 disabled:pointer-events-none shadow-hud"
+        >
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>
+          </svg>
+        </button>
+
+        <!-- Redo Button -->
+        <button
+          id="btn-redo"
+          title="Redo stroke (Ctrl+Y)"
+          class="glass-panel glass-button w-10 h-10 rounded-xl flex items-center justify-center text-slate-300 hover:text-white hover:border-cyan-500/40 disabled:opacity-30 disabled:pointer-events-none shadow-hud"
+        >
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3l3 2.7"/>
+          </svg>
+        </button>
+
+        <!-- Clear Canvas Button -->
+        <button
+          id="btn-clear"
+          title="Clear Canvas"
+          class="glass-panel glass-button px-3 py-2 h-10 rounded-xl flex items-center gap-1.5 text-rose-400 hover:text-rose-300 hover:border-rose-500/40 shadow-hud text-xs font-semibold"
+        >
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+            <line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>
+          </svg>
+          <span class="hidden sm:inline">Clear</span>
+        </button>
+
+        <!-- Download Drawing Button -->
+        <button
+          id="btn-download"
+          title="Download Drawing (Combines Webcam + Canvas)"
+          class="glass-panel glass-button px-3.5 py-2 h-10 rounded-xl flex items-center gap-2 bg-gradient-to-r from-cyan-500/20 to-blue-500/20 text-cyan-300 border border-cyan-500/40 hover:border-cyan-400 shadow-glow-cyan text-xs font-bold"
+        >
+          <svg class="w-4 h-4 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          <span>Download</span>
+        </button>
+
+        <!-- Camera Toggle / Reconnect Button -->
+        <button
+          id="btn-header-camera"
+          title="Connect Camera or Switch Modes"
+          class="glass-panel glass-button px-3 py-2 h-10 rounded-xl flex items-center gap-1.5 text-slate-300 hover:text-cyan-300 hover:border-cyan-500/40 shadow-hud text-xs font-semibold"
+        >
+          <svg class="w-4 h-4 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+            <circle cx="12" cy="13" r="4"/>
+          </svg>
+          <span id="header-camera-label" class="hidden sm:inline">Camera</span>
+        </button>
+
+        <!-- Help / Gesture Guide Button -->
+        <button
+          id="btn-help-toggle"
+          title="Hand Gestures Guide"
+          class="glass-panel glass-button w-10 h-10 rounded-xl flex items-center justify-center text-slate-300 hover:text-cyan-300 hover:border-cyan-500/40 shadow-hud"
+        >
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- CENTER HERO / CAMERA START PROMPT (When Camera is Inactive) -->
+    <div
+      id="camera-prompt-card"
+      class="relative z-40 max-w-md w-full mx-4 my-auto glass-panel p-6 sm:p-8 rounded-2xl shadow-2xl border border-white/10 flex flex-col items-center text-center transition-all duration-300"
+    >
+      <div class="relative w-20 h-20 mb-5 flex items-center justify-center">
+        <div class="absolute inset-0 rounded-full bg-cyan-500/20 animate-ping"></div>
+        <div class="w-16 h-16 rounded-2xl bg-gradient-to-tr from-cyan-500 to-indigo-600 flex items-center justify-center shadow-glow-cyan">
+          <svg class="w-8 h-8 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+            <circle cx="12" cy="13" r="4"/>
+          </svg>
+        </div>
+      </div>
+
+      <h2 class="text-xl sm:text-2xl font-black tracking-tight text-white font-mono">AirCanvas Vision</h2>
+      <p class="text-xs sm:text-sm text-slate-300 mt-2 leading-relaxed">
+        Draw in the air using your index finger. Powered by on-device MediaPipe AI hand tracking. 100% offline & private.
+      </p>
+
+      <!-- Key gestures summary -->
+      <div class="w-full grid grid-cols-2 gap-2 mt-5 text-left">
+        <div class="p-2.5 rounded-lg bg-cyber-900/80 border border-slate-700/60">
+          <div class="text-xs font-bold text-cyan-300 flex items-center gap-1.5">
+            <span class="text-base">☝️</span> 1 Finger Up
+          </div>
+          <p class="text-[11px] text-slate-400 mt-0.5">Draw continuous ink lines in the air</p>
+        </div>
+        <div class="p-2.5 rounded-lg bg-cyber-900/80 border border-slate-700/60">
+          <div class="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+            <span class="text-base">✌️</span> 2 Fingers Up
+          </div>
+          <p class="text-[11px] text-slate-400 mt-0.5">Move / Hover cursor without drawing</p>
+        </div>
+      </div>
+
+      <!-- Start Camera Button -->
+      <button
+        id="btn-start-camera"
+        class="mt-6 w-full py-3.5 px-6 rounded-xl bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 text-white font-bold text-sm tracking-wide shadow-glow-cyan hover:brightness-110 active:scale-98 transition-all flex items-center justify-center gap-2"
+      >
+        <svg class="w-5 h-5 animate-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="5 3 19 12 5 21 5 3"/>
+        </svg>
+        <span>Start Camera</span>
+      </button>
+
+      <!-- Fallback options: Mouse/Touch and Virtual Hand -->
+      <div class="w-full mt-3 flex items-center gap-2">
+        <button
+          id="btn-quick-mouse-mode"
+          class="flex-1 py-2 px-3 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 hover:text-white border border-slate-700 text-xs font-semibold transition-all flex items-center justify-center gap-1.5"
+        >
+          <svg class="w-3.5 h-3.5 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 19l-7-7 7-7"/><path d="M19 12H5"/>
+          </svg>
+          <span>Mouse / Touch</span>
+        </button>
+
+        <button
+          id="btn-quick-virtual-mode"
+          class="flex-1 py-2 px-3 rounded-xl bg-cyan-950/60 hover:bg-cyan-900/60 text-cyan-300 hover:text-cyan-200 border border-cyan-500/40 text-xs font-semibold transition-all flex items-center justify-center gap-1.5"
+        >
+          <span>✋ Virtual Hand</span>
+        </button>
+      </div>
+
+      <!-- Dynamic error and troubleshooting container -->
+      <div id="camera-error-container" class="w-full mt-3 hidden"></div>
+
+      <div class="mt-4 flex items-center justify-center gap-4 text-[11px] text-slate-400 font-mono">
+        <span class="flex items-center gap-1">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> 100% Client-Side
+        </span>
+        <span>•</span>
+        <span>Zero Server Uploads</span>
+      </div>
+    </div>
+
+    <!-- GESTURE GUIDE / HELP MODAL -->
+    <div
+      id="help-modal"
+      class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 transition-opacity duration-200 opacity-0 pointer-events-none"
+    >
+      <div class="glass-panel max-w-lg w-full rounded-2xl p-6 border border-cyan-500/30 shadow-2xl relative">
+        <div class="flex items-center justify-between pb-3 border-b border-white/10">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">✨</span>
+            <h3 class="text-base font-bold text-white font-mono">AirCanvas Gesture Guide</h3>
+          </div>
+          <button id="btn-close-help" class="text-slate-400 hover:text-white p-1 rounded-lg">
+            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="space-y-3.5 my-4">
+          <!-- Gesture 1 -->
+          <div class="flex items-start gap-3 p-3 rounded-xl bg-cyber-900/80 border border-cyan-500/30">
+            <div class="w-10 h-10 rounded-lg bg-cyan-500/20 text-cyan-400 flex items-center justify-center text-xl shrink-0">
+              ☝️
+            </div>
+            <div>
+              <div class="text-sm font-bold text-cyan-300">Draw Mode (Index Up, Middle Down)</div>
+              <p class="text-xs text-slate-300 mt-0.5">
+                Raise your index finger alone. Landmark 8 tracks the tip, drawing smooth ink onto the canvas.
+              </p>
+            </div>
+          </div>
+
+          <!-- Gesture 2 -->
+          <div class="flex items-start gap-3 p-3 rounded-xl bg-cyber-900/80 border border-amber-500/30">
+            <div class="w-10 h-10 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center text-xl shrink-0">
+              ✌️
+            </div>
+            <div>
+              <div class="text-sm font-bold text-amber-300">Hover / Move Mode (Index & Middle Up)</div>
+              <p class="text-xs text-slate-300 mt-0.5">
+                Raise both index and middle fingers together (peace sign). The cursor moves without drawing, so you can reposition your hand.
+              </p>
+            </div>
+          </div>
+
+          <!-- Gesture 3 -->
+          <div class="flex items-start gap-3 p-3 rounded-xl bg-cyber-900/80 border border-slate-700/60">
+            <div class="w-10 h-10 rounded-lg bg-slate-800 text-slate-300 flex items-center justify-center text-xl shrink-0">
+              ✋
+            </div>
+            <div>
+              <div class="text-sm font-bold text-slate-200">Pause / Disengage (Open Palm or Fist)</div>
+              <p class="text-xs text-slate-400 mt-0.5">
+                Show all 5 fingers or close into a fist to stop drawing and rest your arm.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div class="pt-2 text-center">
+          <button
+            id="btn-got-it"
+            class="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-cyber-950 font-bold text-xs tracking-wider uppercase transition-colors"
+          >
+            Got It, Let's Draw!
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- BOTTOM FLOATING TOOLBAR -->
+    <footer class="relative z-40 w-full max-w-4xl px-3 pb-3 sm:pb-5 pointer-events-none">
+      <div class="glass-panel p-2.5 sm:p-3 rounded-2xl shadow-hud flex flex-col md:flex-row items-center justify-between gap-3 pointer-events-auto border border-white/10">
+        
+        <!-- Left: Colors Palette (Red, Blue, Green, Black + bonus neon & eraser) -->
+        <div class="flex items-center gap-1.5 sm:gap-2 flex-wrap justify-center">
+          <span class="text-[11px] font-mono text-slate-400 uppercase tracking-wider hidden lg:inline mr-1">Color:</span>
+          
+          <!-- Red -->
+          <button
+            class="color-btn w-8 h-8 rounded-full border-2 border-transparent transition-all hover:scale-110 active:scale-95 flex items-center justify-center"
+            data-color="#ef4444"
+            title="Red"
+            style="background-color: #ef4444;"
+          ></button>
+
+          <!-- Blue -->
+          <button
+            class="color-btn w-8 h-8 rounded-full border-2 border-transparent transition-all hover:scale-110 active:scale-95 flex items-center justify-center"
+            data-color="#3b82f6"
+            title="Blue"
+            style="background-color: #3b82f6;"
+          ></button>
+
+          <!-- Green -->
+          <button
+            class="color-btn w-8 h-8 rounded-full border-2 border-transparent transition-all hover:scale-110 active:scale-95 flex items-center justify-center"
+            data-color="#10b981"
+            title="Green"
+            style="background-color: #10b981;"
+          ></button>
+
+          <!-- Black -->
+          <button
+            class="color-btn w-8 h-8 rounded-full border-2 border-slate-600 transition-all hover:scale-110 active:scale-95 flex items-center justify-center"
+            data-color="#000000"
+            title="Black"
+            style="background-color: #000000;"
+          ></button>
+
+          <!-- Neon Cyan (Default Active) -->
+          <button
+            class="color-btn w-8 h-8 rounded-full border-2 border-white scale-110 shadow-glow-cyan transition-all hover:scale-110 active:scale-95 flex items-center justify-center ring-2 ring-cyan-400"
+            data-color="#06b6d4"
+            title="Neon Cyan"
+            style="background-color: #06b6d4;"
+          ></button>
+
+          <!-- Neon Yellow -->
+          <button
+            class="color-btn w-8 h-8 rounded-full border-2 border-transparent transition-all hover:scale-110 active:scale-95 flex items-center justify-center"
+            data-color="#eab308"
+            title="Neon Yellow"
+            style="background-color: #eab308;"
+          ></button>
+
+          <!-- Neon Purple -->
+          <button
+            class="color-btn w-8 h-8 rounded-full border-2 border-transparent transition-all hover:scale-110 active:scale-95 flex items-center justify-center"
+            data-color="#a855f7"
+            title="Neon Purple"
+            style="background-color: #a855f7;"
+          ></button>
+
+          <!-- White -->
+          <button
+            class="color-btn w-8 h-8 rounded-full border-2 border-transparent transition-all hover:scale-110 active:scale-95 flex items-center justify-center"
+            data-color="#ffffff"
+            title="White"
+            style="background-color: #ffffff;"
+          ></button>
+
+          <!-- Custom Color Picker -->
+          <label
+            class="w-8 h-8 rounded-full border border-slate-600 bg-cyber-800 hover:border-cyan-400 flex items-center justify-center cursor-pointer transition-all hover:scale-110 relative"
+            title="Custom Color"
+          >
+            <svg class="w-4 h-4 text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>
+            </svg>
+            <input type="color" id="custom-color-input" value="#06b6d4" class="opacity-0 absolute inset-0 w-full h-full cursor-pointer" />
+          </label>
+
+          <!-- Divider -->
+          <div class="h-6 w-px bg-white/10 mx-0.5 sm:mx-1"></div>
+
+          <!-- Eraser Mode Button -->
+          <button
+            id="btn-eraser"
+            title="Eraser Tool"
+            class="glass-button w-8 h-8 rounded-lg bg-cyber-800/80 border border-slate-700 hover:border-cyan-400 flex items-center justify-center text-slate-300 hover:text-white"
+          >
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Center / Right: Brush Size Slider & Style & Opacity Controls -->
+        <div class="flex items-center gap-3 sm:gap-4 flex-wrap justify-center w-full md:w-auto">
+          
+          <!-- Brush Size Control -->
+          <div class="flex items-center gap-2 bg-cyber-900/60 px-3 py-1.5 rounded-xl border border-white/5">
+            <span class="text-[11px] font-mono text-slate-400">Size</span>
+            <!-- Live size preview dot -->
+            <div class="w-6 h-6 flex items-center justify-center">
+              <div id="size-preview-dot" class="rounded-full bg-cyan-400" style="width: 8px; height: 8px;"></div>
+            </div>
+            <input
+              type="range"
+              id="brush-size-slider"
+              min="2"
+              max="40"
+              value="8"
+              class="w-20 sm:w-24 accent-cyan-400 cursor-pointer h-1.5 bg-slate-700 rounded-lg appearance-none"
+            />
+            <span id="brush-size-label" class="text-xs font-mono text-cyan-300 w-6 text-right">8px</span>
+          </div>
+
+          <!-- Brush Style Toggle (Glow vs Solid vs Highlighter) -->
+          <div class="flex items-center gap-1 bg-cyber-900/60 p-1 rounded-xl border border-white/5">
+            <button
+              id="style-glow"
+              title="Neon Glow Brush"
+              class="brush-style-btn px-2 py-1 text-[11px] font-mono rounded-lg bg-cyan-500/20 text-cyan-300 border border-cyan-500/40"
+              data-style="glow"
+            >
+              Glow
+            </button>
+            <button
+              id="style-solid"
+              title="Solid Ink Brush"
+              class="brush-style-btn px-2 py-1 text-[11px] font-mono rounded-lg text-slate-400 hover:text-white"
+              data-style="solid"
+            >
+              Solid
+            </button>
+            <button
+              id="style-highlight"
+              title="Highlighter Brush"
+              class="brush-style-btn px-2 py-1 text-[11px] font-mono rounded-lg text-slate-400 hover:text-white"
+              data-style="highlighter"
+            >
+              Marker
+            </button>
+          </div>
+
+          <!-- Camera Feed Opacity Slider -->
+          <div class="flex items-center gap-2 bg-cyber-900/60 px-3 py-1.5 rounded-xl border border-white/5" title="Adjust Webcam Background Opacity">
+            <svg class="w-3.5 h-3.5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>
+            </svg>
+            <input
+              type="range"
+              id="cam-opacity-slider"
+              min="0"
+              max="100"
+              value="70"
+              class="w-16 accent-indigo-400 cursor-pointer h-1.5 bg-slate-700 rounded-lg appearance-none"
+            />
+          </div>
+
+          <!-- Landmark Skeleton Overlay Toggle -->
+          <button
+            id="btn-toggle-skeleton"
+            title="Toggle Hand Skeleton Mesh"
+            class="glass-button w-8 h-8 rounded-lg bg-cyber-900/60 border border-white/5 text-cyan-400 hover:border-cyan-400 flex items-center justify-center"
+          >
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </footer>
+
+    <!-- INLINE PWA SERVICE WORKER REGISTRATION SCRIPT -->
+    <script>
+      // Register lightweight inline Service Worker via Blob for 100% offline support
+      if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
+        try {
+          const swCode = `
+            const CACHE_NAME = 'aircanvas-pwa-v1';
+            self.addEventListener('install', (e) => {
+              self.skipWaiting();
+            });
+            self.addEventListener('activate', (e) => {
+              e.waitUntil(clients.claim());
+            });
+            self.addEventListener('fetch', (e) => {
+              // Cache-first / Network fallback strategy for offline asset reuse
+              e.respondWith(
+                caches.match(e.request).then((cachedResponse) => {
+                  if (cachedResponse) return cachedResponse;
+                  return fetch(e.request).then((networkResponse) => {
+                    if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
+                      return networkResponse;
+                    }
+                    const responseToCache = networkResponse.clone();
+                    caches.open(CACHE_NAME).then((cache) => {
+                      cache.put(e.request, responseToCache);
+                    });
+                    return networkResponse;
+                  }).catch(() => new Response('AirCanvas is offline'));
+                })
+              );
+            });
+          `;
+          const blob = new Blob([swCode], { type: 'application/javascript' });
+          const swUrl = URL.createObjectURL(blob);
+          navigator.serviceWorker.register(swUrl).catch((err) => {
+            console.debug('ServiceWorker notice:', err);
+          });
+        } catch (e) {
+          console.debug('ServiceWorker init exception:', e);
+        }
+      }
+    </script>
+
+    <!-- INLINE CORE JAVASCRIPT APPLICATION -->
+    <script>
+      (function() {
+        // --- State Management ---
+        const state = {
+          cameraActive: false,
+          isDrawing: false,
+          currentColor: '#06b6d4',
+          brushSize: 8,
+          brushStyle: 'glow', // 'glow', 'solid', 'highlighter'
+          isEraser: false,
+          showSkeleton: true,
+          mode: 'standby', // 'standby', 'camera', 'virtual', 'touch'
+          isVirtualActive: false,
+          lastPoint: null,
+          smoothedPoint: null,
+          history: [],
+          redoStack: [],
+          maxHistory: 20,
+          videoWidth: 1280,
+          videoHeight: 720,
+          camOpacity: 0.7
+        };
+
+        // DOM Elements
+        const videoElement = document.getElementById('webcam-video');
+        const drawingCanvas = document.getElementById('drawing-canvas');
+        const drawingCtx = drawingCanvas.getContext('2d', { willReadFrequently: true });
+        const hudCanvas = document.getElementById('hud-canvas');
+        const hudCtx = hudCanvas.getContext('2d');
+
+        const airPointer = document.getElementById('air-pointer');
+        const pointerRing = document.getElementById('pointer-ring');
+        const pointerDot = document.getElementById('pointer-dot');
+        const pointerBadge = document.getElementById('pointer-badge');
+
+        const statusDot = document.getElementById('status-indicator-dot');
+        const statusText = document.getElementById('status-indicator-text');
+        const cameraPrompt = document.getElementById('camera-prompt-card');
+        const btnStartCamera = document.getElementById('btn-start-camera');
+        const btnQuickMouse = document.getElementById('btn-quick-mouse-mode');
+        const btnQuickVirtual = document.getElementById('btn-quick-virtual-mode');
+        const btnHeaderCamera = document.getElementById('btn-header-camera');
+        const headerCameraLabel = document.getElementById('header-camera-label');
+        const cameraErrorContainer = document.getElementById('camera-error-container');
+
+        const btnUndo = document.getElementById('btn-undo');
+        const btnRedo = document.getElementById('btn-redo');
+        const btnClear = document.getElementById('btn-clear');
+        const btnDownload = document.getElementById('btn-download');
+        const btnEraser = document.getElementById('btn-eraser');
+        const btnToggleSkeleton = document.getElementById('btn-toggle-skeleton');
+
+        const sizeSlider = document.getElementById('brush-size-slider');
+        const sizeLabel = document.getElementById('brush-size-label');
+        const sizeDot = document.getElementById('size-preview-dot');
+        const opacitySlider = document.getElementById('cam-opacity-slider');
+        const customColorInput = document.getElementById('custom-color-input');
+
+        const helpModal = document.getElementById('help-modal');
+        const btnHelpToggle = document.getElementById('btn-help-toggle');
+        const btnCloseHelp = document.getElementById('btn-close-help');
+        const btnGotIt = document.getElementById('btn-got-it');
+
+        let cameraInstance = null;
+        let handsInstance = null;
+
+        // Resize canvases to window resolution
+        function resizeCanvases() {
+          const width = window.innerWidth;
+          const height = window.innerHeight;
+
+          // Preserve drawing on resize
+          let tempCanvas = null;
+          if (drawingCanvas.width > 0 && drawingCanvas.height > 0) {
+            tempCanvas = document.createElement('canvas');
+            tempCanvas.width = drawingCanvas.width;
+            tempCanvas.height = drawingCanvas.height;
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCtx.drawImage(drawingCanvas, 0, 0);
+          }
+
+          drawingCanvas.width = width;
+          drawingCanvas.height = height;
+          hudCanvas.width = width;
+          hudCanvas.height = height;
+
+          if (tempCanvas) {
+            drawingCtx.drawImage(tempCanvas, 0, 0, width, height);
+          }
+        }
+        window.addEventListener('resize', resizeCanvases);
+        resizeCanvases();
+
+        // Save state snapshot for Undo/Redo
+        function saveSnapshot() {
+          try {
+            const snapshot = drawingCtx.getImageData(0, 0, drawingCanvas.width, drawingCanvas.height);
+            state.history.push(snapshot);
+            if (state.history.length > state.maxHistory) {
+              state.history.shift();
+            }
+            state.redoStack = [];
+            updateUndoRedoButtons();
+          } catch (e) {
+            console.warn('Snapshot notice:', e);
+          }
+        }
+
+        function updateUndoRedoButtons() {
+          btnUndo.disabled = state.history.length <= 1;
+          btnRedo.disabled = state.redoStack.length === 0;
+        }
+
+        // Initialize snapshot
+        saveSnapshot();
+
+        // Undo action
+        function undo() {
+          if (state.history.length > 1) {
+            const current = state.history.pop();
+            state.redoStack.push(current);
+            const prev = state.history[state.history.length - 1];
+            drawingCtx.putImageData(prev, 0, 0);
+            updateUndoRedoButtons();
+          }
+        }
+
+        // Redo action
+        function redo() {
+          if (state.redoStack.length > 0) {
+            const next = state.redoStack.pop();
+            state.history.push(next);
+            drawingCtx.putImageData(next, 0, 0);
+            updateUndoRedoButtons();
+          }
+        }
+
+        // Clear action
+        function clearCanvas() {
+          drawingCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+          saveSnapshot();
+        }
+
+        btnUndo.addEventListener('click', undo);
+        btnRedo.addEventListener('click', redo);
+        btnClear.addEventListener('click', clearCanvas);
+
+        // Keyboard shortcuts (Ctrl+Z, Ctrl+Y)
+        window.addEventListener('keydown', (e) => {
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+            if (e.shiftKey) redo();
+            else undo();
+          } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+            redo();
+          }
+        });
+
+        // --- Color and Style Management ---
+        const colorButtons = document.querySelectorAll('.color-btn');
+        function setColor(hex) {
+          state.isEraser = false;
+          btnEraser.classList.remove('bg-rose-500/30', 'text-rose-400', 'border-rose-500');
+          state.currentColor = hex;
+
+          colorButtons.forEach((btn) => {
+            const btnColor = btn.getAttribute('data-color');
+            if (btnColor && btnColor.toLowerCase() === hex.toLowerCase()) {
+              btn.classList.add('border-white', 'scale-110', 'ring-2', 'ring-cyan-400');
+            } else {
+              btn.classList.remove('border-white', 'scale-110', 'ring-2', 'ring-cyan-400');
+            }
+          });
+
+          updatePointerStyle();
+        }
+
+        colorButtons.forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const color = btn.getAttribute('data-color');
+            if (color) setColor(color);
+          });
+        });
+
+        customColorInput.addEventListener('input', (e) => {
+          setColor(e.target.value);
+        });
+
+        // Eraser Toggle
+        btnEraser.addEventListener('click', () => {
+          state.isEraser = !state.isEraser;
+          if (state.isEraser) {
+            btnEraser.classList.add('bg-rose-500/30', 'text-rose-400', 'border-rose-500');
+            colorButtons.forEach(b => b.classList.remove('border-white', 'scale-110', 'ring-2', 'ring-cyan-400'));
+          } else {
+            setColor(state.currentColor);
+          }
+          updatePointerStyle();
+        });
+
+        // Brush Size Slider
+        sizeSlider.addEventListener('input', (e) => {
+          const val = parseInt(e.target.value, 10);
+          state.brushSize = val;
+          sizeLabel.textContent = `${val}px`;
+          sizeDot.style.width = `${Math.min(24, Math.max(4, val))}px`;
+          sizeDot.style.height = `${Math.min(24, Math.max(4, val))}px`;
+          updatePointerStyle();
+        });
+
+        // Brush Styles
+        const styleButtons = document.querySelectorAll('.brush-style-btn');
+        styleButtons.forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const style = btn.getAttribute('data-style');
+            if (style) {
+              state.brushStyle = style;
+              styleButtons.forEach(b => {
+                b.className = 'brush-style-btn px-2 py-1 text-[11px] font-mono rounded-lg text-slate-400 hover:text-white';
+              });
+              btn.className = 'brush-style-btn px-2 py-1 text-[11px] font-mono rounded-lg bg-cyan-500/20 text-cyan-300 border border-cyan-500/40';
+            }
+          });
+        });
+
+        // Camera Opacity Slider
+        opacitySlider.addEventListener('input', (e) => {
+          const val = parseInt(e.target.value, 10) / 100;
+          state.camOpacity = val;
+          videoElement.style.opacity = val;
+        });
+
+        // Skeleton Toggle
+        btnToggleSkeleton.addEventListener('click', () => {
+          state.showSkeleton = !state.showSkeleton;
+          btnToggleSkeleton.classList.toggle('text-cyan-400', state.showSkeleton);
+          btnToggleSkeleton.classList.toggle('text-slate-500', !state.showSkeleton);
+        });
+
+        // Help Modal Controls
+        function toggleHelp(show) {
+          if (show) {
+            helpModal.classList.remove('opacity-0', 'pointer-events-none');
+          } else {
+            helpModal.classList.add('opacity-0', 'pointer-events-none');
+          }
+        }
+        btnHelpToggle.addEventListener('click', () => toggleHelp(true));
+        btnCloseHelp.addEventListener('click', () => toggleHelp(false));
+        btnGotIt.addEventListener('click', () => toggleHelp(false));
+        helpModal.addEventListener('click', (e) => {
+          if (e.target === helpModal) toggleHelp(false);
+        });
+
+        function updatePointerStyle() {
+          if (state.isEraser) {
+            pointerDot.style.backgroundColor = '#f43f5e';
+            pointerRing.style.borderColor = '#f43f5e';
+            pointerDot.style.boxShadow = '0 0 12px #f43f5e';
+            pointerBadge.textContent = 'ERASER';
+            pointerBadge.className = 'absolute left-8 top-1/2 -translate-y-1/2 px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider uppercase text-rose-200 bg-cyber-900/90 border border-rose-500/40 whitespace-nowrap shadow-md';
+          } else {
+            pointerDot.style.backgroundColor = state.currentColor;
+            pointerRing.style.borderColor = state.currentColor;
+            pointerDot.style.boxShadow = `0 0 12px ${state.currentColor}`;
+            sizeDot.style.backgroundColor = state.currentColor;
+          }
+        }
+        updatePointerStyle();
+
+        // --- Download Drawing (Merges Video + Canvas) ---
+        btnDownload.addEventListener('click', () => {
+          const exportCanvas = document.createElement('canvas');
+          exportCanvas.width = drawingCanvas.width;
+          exportCanvas.height = drawingCanvas.height;
+          const exportCtx = exportCanvas.getContext('2d');
+
+          // If webcam is active, draw the current mirrored video snapshot as background
+          if (state.cameraActive && videoElement.readyState >= 2) {
+            exportCtx.save();
+            // Mirror horizontally to match on-screen perception
+            exportCtx.translate(exportCanvas.width, 0);
+            exportCtx.scale(-1, 1);
+            exportCtx.drawImage(videoElement, 0, 0, exportCanvas.width, exportCanvas.height);
+            exportCtx.restore();
+
+            // Optional dark cinematic overlay so drawing strokes pop
+            exportCtx.fillStyle = 'rgba(6, 8, 13, 0.25)';
+            exportCtx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+          } else {
+            // Dark futuristic background if camera is not active
+            exportCtx.fillStyle = '#06080d';
+            exportCtx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+          }
+
+          // Composite the user's drawing on top
+          exportCtx.drawImage(drawingCanvas, 0, 0);
+
+          // Subtle AirCanvas watermark badge in the corner
+          exportCtx.save();
+          exportCtx.fillStyle = 'rgba(6, 182, 212, 0.85)';
+          exportCtx.font = 'bold 16px monospace';
+          exportCtx.fillText('AirCanvas • AI Vision', 28, exportCanvas.height - 30);
+          exportCtx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+          exportCtx.font = '12px monospace';
+          const dateStr = new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+          exportCtx.fillText(dateStr, 28, exportCanvas.height - 14);
+          exportCtx.restore();
+
+          // Trigger download
+          try {
+            const dataUrl = exportCanvas.toDataURL('image/png');
+            const a = document.createElement('a');
+            a.download = `AirCanvas-${Date.now()}.png`;
+            a.href = dataUrl;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          } catch (e) {
+            console.warn('Download notice:', e);
+          }
+        });
+
+        // --- Simulated Virtual Hand Generator for Camera-Free Testing ---
+        function createSimulatedHandLandmarks(normX, normY, isDrawGesture) {
+          const scale = 0.22;
+          const wrist = { x: normX, y: Math.min(0.98, normY + scale * 0.95), z: 0 };
+          const lm = [];
+          lm[0] = wrist;
+
+          // Thumb
+          lm[1] = { x: normX + scale * 0.18, y: normY + scale * 0.72, z: 0 };
+          lm[2] = { x: normX + scale * 0.32, y: normY + scale * 0.58, z: 0 };
+          lm[3] = { x: normX + scale * 0.38, y: normY + scale * 0.48, z: 0 };
+          lm[4] = { x: normX + scale * 0.42, y: normY + scale * 0.40, z: 0 };
+
+          // Index (5: MCP, 6: PIP, 7: DIP, 8: TIP) - pointing to cursor
+          lm[5] = { x: normX + scale * 0.10, y: normY + scale * 0.45, z: 0 };
+          lm[6] = { x: normX + scale * 0.06, y: normY + scale * 0.30, z: 0 };
+          lm[7] = { x: normX + scale * 0.03, y: normY + scale * 0.15, z: 0 };
+          lm[8] = { x: normX, y: normY, z: 0 };
+
+          // Middle (9: MCP, 10: PIP, 11: DIP, 12: TIP)
+          lm[9] = { x: normX - scale * 0.04, y: normY + scale * 0.45, z: 0 };
+          if (isDrawGesture) {
+            // Folded down for DRAW mode
+            lm[10] = { x: normX - scale * 0.05, y: normY + scale * 0.52, z: 0 };
+            lm[11] = { x: normX - scale * 0.06, y: normY + scale * 0.58, z: 0 };
+            lm[12] = { x: normX - scale * 0.07, y: normY + scale * 0.63, z: 0 };
+          } else {
+            // Extended up for HOVER mode
+            lm[10] = { x: normX - scale * 0.06, y: normY + scale * 0.30, z: 0 };
+            lm[11] = { x: normX - scale * 0.08, y: normY + scale * 0.15, z: 0 };
+            lm[12] = { x: normX - scale * 0.10, y: normY + scale * 0.02, z: 0 };
+          }
+
+          // Ring
+          lm[13] = { x: normX - scale * 0.16, y: normY + scale * 0.48, z: 0 };
+          lm[14] = { x: normX - scale * 0.18, y: normY + scale * 0.56, z: 0 };
+          lm[15] = { x: normX - scale * 0.20, y: normY + scale * 0.62, z: 0 };
+          lm[16] = { x: normX - scale * 0.21, y: normY + scale * 0.68, z: 0 };
+
+          // Pinky
+          lm[17] = { x: normX - scale * 0.26, y: normY + scale * 0.52, z: 0 };
+          lm[18] = { x: normX - scale * 0.28, y: normY + scale * 0.60, z: 0 };
+          lm[19] = { x: normX - scale * 0.29, y: normY + scale * 0.67, z: 0 };
+          lm[20] = { x: normX - scale * 0.30, y: normY + scale * 0.72, z: 0 };
+
+          return lm;
+        }
+
+        // --- Mouse / Touch Drawing & Virtual Hand Handling ---
+        let isMouseDown = false;
+        function handlePointer(e) {
+          const rect = drawingCanvas.getBoundingClientRect();
+          const clientX = e.clientX !== undefined ? e.clientX : (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
+          const clientY = e.clientY !== undefined ? e.clientY : (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
+          const x = clientX - rect.left;
+          const y = clientY - rect.top;
+
+          if (state.isVirtualActive) {
+            // Virtual Hand Simulation: Mouse down = Draw mode, Mouse up = Hover mode
+            const isDraw = isMouseDown || (e.buttons === 1);
+            const normX = 1 - (x / drawingCanvas.width);
+            const normY = y / drawingCanvas.height;
+            const simLandmarks = createSimulatedHandLandmarks(normX, normY, isDraw);
+            onHandResults({ multiHandLandmarks: [simLandmarks] });
+            return;
+          }
+
+          // Direct Touch / Mouse Canvas Drawing (fallback when camera is off)
+          if (!state.cameraActive && isMouseDown) {
+            drawStroke(x, y);
+          }
+        }
+
+        drawingCanvas.addEventListener('mousedown', (e) => {
+          isMouseDown = true;
+          const rect = drawingCanvas.getBoundingClientRect();
+          state.lastPoint = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+          handlePointer(e);
+        });
+        window.addEventListener('mouseup', (e) => {
+          if (isMouseDown) {
+            isMouseDown = false;
+            state.lastPoint = null;
+            saveSnapshot();
+            if (state.isVirtualActive) {
+              handlePointer(e);
+            }
+          }
+        });
+        drawingCanvas.addEventListener('mousemove', handlePointer);
+
+        drawingCanvas.addEventListener('touchstart', (e) => {
+          isMouseDown = true;
+          const rect = drawingCanvas.getBoundingClientRect();
+          if (e.touches && e.touches[0]) {
+            state.lastPoint = { x: e.touches[0].clientX - rect.left, y: e.touches[0].clientY - rect.top };
+            handlePointer(e);
+          }
+        }, { passive: false });
+        window.addEventListener('touchend', (e) => {
+          if (isMouseDown) {
+            isMouseDown = false;
+            state.lastPoint = null;
+            saveSnapshot();
+          }
+        });
+        drawingCanvas.addEventListener('touchmove', (e) => {
+          e.preventDefault();
+          handlePointer(e);
+        }, { passive: false });
+
+        // --- Stroke Drawing Logic with Smoothing ---
+        function drawStroke(x, y) {
+          if (!state.lastPoint) {
+            state.lastPoint = { x, y };
+            return;
+          }
+
+          drawingCtx.save();
+
+          if (state.isEraser) {
+            drawingCtx.globalCompositeOperation = 'destination-out';
+            drawingCtx.lineWidth = state.brushSize * 2.2;
+            drawingCtx.lineCap = 'round';
+            drawingCtx.lineJoin = 'round';
+            drawingCtx.beginPath();
+            drawingCtx.moveTo(state.lastPoint.x, state.lastPoint.y);
+            drawingCtx.lineTo(x, y);
+            drawingCtx.stroke();
+          } else {
+            drawingCtx.globalCompositeOperation = 'source-over';
+            drawingCtx.lineCap = 'round';
+            drawingCtx.lineJoin = 'round';
+
+            if (state.brushStyle === 'highlighter') {
+              drawingCtx.globalAlpha = 0.35;
+              drawingCtx.lineWidth = state.brushSize * 1.8;
+              drawingCtx.strokeStyle = state.currentColor;
+              drawingCtx.beginPath();
+              drawingCtx.moveTo(state.lastPoint.x, state.lastPoint.y);
+              drawingCtx.lineTo(x, y);
+              drawingCtx.stroke();
+            } else if (state.brushStyle === 'glow') {
+              // Neon Outer Glow
+              drawingCtx.shadowColor = state.currentColor;
+              drawingCtx.shadowBlur = state.brushSize * 1.4;
+              drawingCtx.lineWidth = state.brushSize;
+              drawingCtx.strokeStyle = state.currentColor;
+              drawingCtx.beginPath();
+              drawingCtx.moveTo(state.lastPoint.x, state.lastPoint.y);
+              drawingCtx.lineTo(x, y);
+              drawingCtx.stroke();
+
+              // Crisp Core
+              drawingCtx.shadowBlur = 0;
+              drawingCtx.lineWidth = Math.max(2, state.brushSize * 0.4);
+              drawingCtx.strokeStyle = '#ffffff';
+              drawingCtx.stroke();
+            } else {
+              // Solid standard ink
+              drawingCtx.lineWidth = state.brushSize;
+              drawingCtx.strokeStyle = state.currentColor;
+              drawingCtx.beginPath();
+              drawingCtx.moveTo(state.lastPoint.x, state.lastPoint.y);
+              drawingCtx.lineTo(x, y);
+              drawingCtx.stroke();
+            }
+          }
+
+          drawingCtx.restore();
+          state.lastPoint = { x, y };
+        }
+
+        // --- MediaPipe Hand Tracking Setup ---
+        function onHandResults(results) {
+          hudCtx.clearRect(0, 0, hudCanvas.width, hudCanvas.height);
+
+          if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+            // No hands detected
+            statusDot.className = 'w-2 h-2 rounded-full bg-slate-500';
+            statusText.textContent = 'Waiting for hand...';
+            airPointer.style.opacity = '0';
+            if (state.isDrawing) {
+              state.isDrawing = false;
+              state.lastPoint = null;
+              saveSnapshot();
+            }
+            return;
+          }
+
+          const landmarks = results.multiHandLandmarks[0];
+
+          // Draw skeleton connectors on HUD canvas if enabled
+          if (state.showSkeleton && window.drawConnectors && window.drawLandmarks && window.HAND_CONNECTIONS) {
+            hudCtx.save();
+            // Invert x for mirrored display on HUD
+            hudCtx.translate(hudCanvas.width, 0);
+            hudCtx.scale(-1, 1);
+            window.drawConnectors(hudCtx, landmarks, window.HAND_CONNECTIONS, {
+              color: 'rgba(6, 182, 212, 0.35)',
+              lineWidth: 2
+            });
+            window.drawLandmarks(hudCtx, landmarks, {
+              color: 'rgba(255, 255, 255, 0.7)',
+              lineWidth: 1,
+              radius: 3
+            });
+            hudCtx.restore();
+          }
+
+          // Finger Landmark IDs:
+          // 8: Index Tip, 6: Index PIP, 5: Index MCP
+          // 12: Middle Tip, 10: Middle PIP, 9: Middle MCP
+          // 16: Ring Tip, 14: Ring PIP
+          // 20: Pinky Tip, 18: Pinky PIP
+          // 0: Wrist
+          const indexTip = landmarks[8];
+          const indexPip = landmarks[6];
+          const middleTip = landmarks[12];
+          const middlePip = landmarks[10];
+
+          // Because the webcam video is mirrored via CSS scaleX(-1),
+          // raw coordinate x=0 (camera sensor left) corresponds to screen right.
+          // Screen coordinate is: (1 - x) * canvas.width.
+          const rawScreenX = (1 - indexTip.x) * drawingCanvas.width;
+          const rawScreenY = indexTip.y * drawingCanvas.height;
+
+          // Exponential Moving Average (EMA) smoothing to eliminate hand tremor
+          if (!state.smoothedPoint) {
+            state.smoothedPoint = { x: rawScreenX, y: rawScreenY };
+          } else {
+            const alpha = 0.45; // Smoothing factor
+            state.smoothedPoint.x = state.smoothedPoint.x * (1 - alpha) + rawScreenX * alpha;
+            state.smoothedPoint.y = state.smoothedPoint.y * (1 - alpha) + rawScreenY * alpha;
+          }
+
+          const screenX = state.smoothedPoint.x;
+          const screenY = state.smoothedPoint.y;
+
+          // Check if index finger is UP (either Y-coordinate or Euclidean distance from wrist)
+          const wrist = landmarks[0];
+          const distIndexTip = Math.hypot(indexTip.x - wrist.x, indexTip.y - wrist.y);
+          const distIndexPip = Math.hypot(indexPip.x - wrist.x, indexPip.y - wrist.y);
+          const isIndexUp = (indexTip.y < indexPip.y) || (distIndexTip > distIndexPip * 1.18);
+
+          // Check if middle finger is UP
+          const distMiddleTip = Math.hypot(middleTip.x - wrist.x, middleTip.y - wrist.y);
+          const distMiddlePip = Math.hypot(middlePip.x - wrist.x, middlePip.y - wrist.y);
+          const isMiddleUp = (middleTip.y < middlePip.y) || (distMiddleTip > distMiddlePip * 1.18);
+
+          // Update On-Screen Pointer location
+          airPointer.style.left = `${screenX}px`;
+          airPointer.style.top = `${screenY}px`;
+          airPointer.style.opacity = '1';
+
+          // Gesture Logic:
+          // 1. DRAWING: Index finger is UP AND Middle finger is DOWN
+          if (isIndexUp && !isMiddleUp) {
+            statusDot.className = 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse';
+            statusText.textContent = state.isEraser ? 'Erasing (1 Finger)' : 'Drawing in Air (1 Finger)';
+            pointerBadge.textContent = state.isEraser ? 'ERASING' : 'DRAWING';
+            pointerBadge.className = state.isEraser 
+              ? 'absolute left-8 top-1/2 -translate-y-1/2 px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider uppercase text-rose-200 bg-cyber-900/90 border border-rose-500/40 whitespace-nowrap shadow-md'
+              : 'absolute left-8 top-1/2 -translate-y-1/2 px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider uppercase text-cyan-200 bg-cyber-900/90 border border-cyan-500/40 whitespace-nowrap shadow-md';
+            pointerRing.classList.remove('scale-150', 'border-amber-400');
+            pointerRing.classList.add('border-cyan-400');
+
+            state.isDrawing = true;
+            drawStroke(screenX, screenY);
+
+          } else if (isIndexUp && isMiddleUp) {
+            // 2. HOVER / NAVIGATION: Both Index & Middle fingers UP (Peace sign)
+            statusDot.className = 'w-2 h-2 rounded-full bg-amber-400';
+            statusText.textContent = 'Hovering (2 Fingers Up)';
+            pointerBadge.textContent = 'HOVER';
+            pointerBadge.className = 'absolute left-8 top-1/2 -translate-y-1/2 px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider uppercase text-amber-200 bg-cyber-900/90 border border-amber-500/40 whitespace-nowrap shadow-md';
+            pointerRing.classList.add('scale-150', 'border-amber-400');
+            pointerRing.classList.remove('border-cyan-400');
+
+            if (state.isDrawing) {
+              state.isDrawing = false;
+              state.lastPoint = null;
+              saveSnapshot();
+            }
+
+          } else {
+            // 3. IDLE / PAUSE (Fist or Open Palm or neutral)
+            statusDot.className = 'w-2 h-2 rounded-full bg-indigo-400';
+            statusText.textContent = 'Hand Paused';
+            pointerBadge.textContent = 'PAUSED';
+            pointerBadge.className = 'absolute left-8 top-1/2 -translate-y-1/2 px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider uppercase text-slate-300 bg-cyber-900/90 border border-slate-600 whitespace-nowrap shadow-md';
+
+            if (state.isDrawing) {
+              state.isDrawing = false;
+              state.lastPoint = null;
+              saveSnapshot();
+            }
+          }
+        }
+
+        // --- Mode Switching Handlers ---
+        function enableManualMode() {
+          state.mode = 'touch';
+          state.isVirtualActive = false;
+          cameraPrompt.classList.add('opacity-0', 'pointer-events-none');
+          setTimeout(() => cameraPrompt.classList.add('hidden'), 300);
+
+          statusDot.className = 'w-2 h-2 rounded-full bg-cyan-400';
+          statusText.textContent = 'Touch / Mouse Mode';
+          if (headerCameraLabel) headerCameraLabel.textContent = 'Connect Camera';
+          airPointer.style.opacity = '0';
+          hudCtx.clearRect(0, 0, hudCanvas.width, hudCanvas.height);
+        }
+
+        function enableVirtualHandMode() {
+          state.mode = 'virtual';
+          state.isVirtualActive = true;
+          cameraPrompt.classList.add('opacity-0', 'pointer-events-none');
+          setTimeout(() => cameraPrompt.classList.add('hidden'), 300);
+
+          statusDot.className = 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse';
+          statusText.textContent = 'Virtual Hand AI Active';
+          if (headerCameraLabel) headerCameraLabel.textContent = 'Connect Camera';
+
+          // Trigger initial simulated hand at center of viewport
+          const centerX = drawingCanvas.width / 2;
+          const centerY = drawingCanvas.height / 2;
+          const normX = 1 - (centerX / drawingCanvas.width);
+          const normY = centerY / drawingCanvas.height;
+          const sim = createSimulatedHandLandmarks(normX, normY, false);
+          onHandResults({ multiHandLandmarks: [sim] });
+        }
+
+        if (btnQuickMouse) btnQuickMouse.addEventListener('click', enableManualMode);
+        if (btnQuickVirtual) btnQuickVirtual.addEventListener('click', enableVirtualHandMode);
+
+        if (btnHeaderCamera) {
+          btnHeaderCamera.addEventListener('click', () => {
+            if (state.cameraActive) {
+              enableManualMode();
+            } else {
+              cameraPrompt.classList.remove('hidden', 'opacity-0', 'pointer-events-none');
+              startCameraAndAI();
+            }
+          });
+        }
+
+        // --- Start Camera & MediaPipe Initialization ---
+        async function startCameraAndAI() {
+          if (cameraErrorContainer) {
+            cameraErrorContainer.classList.add('hidden');
+            cameraErrorContainer.innerHTML = '';
+          }
+
+          btnStartCamera.disabled = true;
+          btnStartCamera.innerHTML = `
+            <svg class="animate-spin w-5 h-5 text-white" viewBox="0 0 24 24" fill="none">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+            </svg>
+            <span>Starting AI Vision...</span>
+          `;
+
+          try {
+            // Check if MediaPipe is loaded
+            if (typeof window.Hands === 'undefined') {
+              throw new Error('MediaPipe Hands is loading or unavailable. Please check your internet connection.');
+            }
+
+            // Initialize MediaPipe Hands model with CDN asset resolver
+            if (!handsInstance) {
+              handsInstance = new window.Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`
+              });
+
+              handsInstance.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.55,
+                minTrackingConfidence: 0.55
+              });
+
+              handsInstance.onResults(onHandResults);
+            }
+
+            // Request camera stream with automatic fallback
+            let startedWithCameraUtils = false;
+            if (typeof window.Camera !== 'undefined') {
+              try {
+                cameraInstance = new window.Camera(videoElement, {
+                  onFrame: async () => {
+                    if (handsInstance && videoElement.videoWidth > 0 && state.cameraActive) {
+                      await handsInstance.send({ image: videoElement });
+                    }
+                  },
+                  width: 1280,
+                  height: 720
+                });
+                await cameraInstance.start();
+                startedWithCameraUtils = true;
+              } catch (e) {
+                console.warn('Camera utility start failed, trying native getUserMedia:', e);
+              }
+            }
+
+            if (!startedWithCameraUtils) {
+              const stream = await navigator.mediaDevices.getUserMedia({
+                video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+                audio: false
+              });
+              videoElement.srcObject = stream;
+              await videoElement.play();
+
+              async function processLoop() {
+                if (state.cameraActive && videoElement.readyState >= 2 && handsInstance) {
+                  try {
+                    await handsInstance.send({ image: videoElement });
+                  } catch (e) {
+                    // Frame skip
+                  }
+                }
+                if (state.cameraActive) {
+                  requestAnimationFrame(processLoop);
+                }
+              }
+              requestAnimationFrame(processLoop);
+            }
+
+            state.cameraActive = true;
+            state.isVirtualActive = false;
+            state.mode = 'camera';
+            if (headerCameraLabel) headerCameraLabel.textContent = 'Camera On';
+
+            cameraPrompt.classList.add('opacity-0', 'pointer-events-none');
+            setTimeout(() => {
+              cameraPrompt.classList.add('hidden');
+            }, 300);
+
+            statusDot.className = 'w-2 h-2 rounded-full bg-emerald-400';
+            statusText.textContent = 'Vision Online • Ready';
+
+          } catch (err) {
+            console.warn('Camera/AI initialization notice:', err?.name, err?.message);
+            btnStartCamera.disabled = false;
+            btnStartCamera.innerHTML = `
+              <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <polygon points="5 3 19 12 5 21 5 3"/>
+              </svg>
+              <span>Retry Camera</span>
+            `;
+
+            const isDenied = err.name === 'NotAllowedError' || 
+              (err.message && err.message.toLowerCase().includes('permission denied'));
+
+            if (cameraErrorContainer) {
+              cameraErrorContainer.innerHTML = `
+                <div class="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-left text-xs space-y-2 mt-2">
+                  <div class="flex items-center gap-1.5 font-bold text-rose-300">
+                    <svg class="w-4 h-4 text-rose-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                    </svg>
+                    <span>${isDenied ? 'Camera Permission Denied' : 'Camera Unavailable'}</span>
+                  </div>
+                  <p class="text-slate-300 text-[11px] leading-relaxed">
+                    ${isDenied 
+                      ? 'Browser blocked camera access or no webcam was detected. You can unlock it via the lock/camera icon in your address bar, or jump right into drawing below:' 
+                      : (err.message || 'Unable to access video device.')}
+                  </p>
+                  <div class="flex items-center gap-2 pt-1">
+                    <button id="btn-err-mouse" class="flex-1 py-1.5 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 font-semibold text-[11px] transition-colors">
+                      Mouse / Touch
+                    </button>
+                    <button id="btn-err-virtual" class="flex-1 py-1.5 px-2.5 rounded-lg bg-cyan-950 hover:bg-cyan-900 text-cyan-300 border border-cyan-500/40 font-semibold text-[11px] transition-colors">
+                      ✋ Virtual Hand
+                    </button>
+                  </div>
+                </div>
+              `;
+              cameraErrorContainer.classList.remove('hidden');
+
+              document.getElementById('btn-err-mouse')?.addEventListener('click', enableManualMode);
+              document.getElementById('btn-err-virtual')?.addEventListener('click', enableVirtualHandMode);
+            }
+          }
+        }
+
+        btnStartCamera.addEventListener('click', startCameraAndAI);
+
+      })();
+    </script>
+  </body>
+</html>
